@@ -152,7 +152,7 @@ export function AgentDebugPage() {
               <div>
                 <Typography.Title level={4}>调试输入</Typography.Title>
                 <Typography.Paragraph>
-                  可选绑定 `kbId` 和 `sessionId`，用于验证 FAQ / Policy 场景或短期记忆链路。
+                  可选绑定 kbId 和 sessionId，用于验证 FAQ / Policy 场景或短期记忆链路。
                 </Typography.Paragraph>
               </div>
             </div>

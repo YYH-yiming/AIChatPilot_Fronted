@@ -100,6 +100,34 @@ a {
   box-shadow: var(--shadow-soft);
 }
 
+.auth-shell__capabilities {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.auth-shell__capabilities li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 14px;
+  border-left: 2px solid var(--accent-main);
+}
+
+.auth-shell__capabilities strong {
+  color: var(--text-main);
+  font-size: 14px;
+}
+
+.auth-shell__capabilities span {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .eyebrow {
   display: inline-flex;
   align-items: center;
@@ -433,12 +461,9 @@ a {
   margin-bottom: 12px;
 }
 
-.chat-stream-button {
-  margin-left: 12px;
-}
-
-.chat-stream-status {
-  margin-top: 12px;
+.chat-send-hint {
+  margin: 12px 0 0 !important;
+  color: var(--text-secondary);
 }
 
 .knowledge-debug-results .content-state {
@@ -598,11 +623,6 @@ a {
 
   .settings-form__grid {
     grid-template-columns: 1fr;
-  }
-
-  .chat-stream-button {
-    margin-left: 0;
-    margin-top: 12px;
   }
 
   .app-shell__content {

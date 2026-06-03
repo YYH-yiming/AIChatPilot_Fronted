@@ -384,7 +384,7 @@ export function KnowledgeDetailPage() {
           <div>
             <Typography.Title level={4}>单文件上传</Typography.Title>
             <Typography.Paragraph>
-              上传成功仅表示文档已入队，系统会继续轮询单文档状态，直到 `parseStatus=2` 或 `3` 停止。
+              上传成功仅表示文档已入队，系统会继续轮询单文档状态，直到 parseStatus 变为 2（已完成）或 3（失败）为止。
             </Typography.Paragraph>
           </div>
           <Space size={12}>

@@ -81,15 +81,16 @@ export function ChatCreateSessionModal({
         <Form.Item
           label="知识库"
           name="kbId"
-          // rules={[
-          //   {
-          //     validator: async (_rule: unknown, value: number | undefined) => {
-          //       if (mode === 'knowledge' && !value) {
-          //         throw new Error('knowledge 模式必须选择 kbId');
-          //       }
-          //     },
-          //   },
-          // ]}
+          dependencies={['mode']}
+          rules={[
+            {
+              validator: async (_rule, value: number | undefined) => {
+                if (mode === 'knowledge' && !value) {
+                  throw new Error('Knowledge 模式需选择要绑定的知识库');
+                }
+              },
+            },
+          ]}
         >
           <Select
             allowClear

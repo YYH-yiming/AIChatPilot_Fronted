@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 type PageHeaderProps = {
   eyebrow?: string;
   title: string;
-  description: string;
+  description?: string;
   extra?: ReactNode;
 };
 
@@ -21,7 +21,9 @@ export function PageHeader({
           {eyebrow ? <Tag color="cyan">{eyebrow}</Tag> : null}
         </Space>
         <Typography.Title level={2}>{title}</Typography.Title>
-        <Typography.Paragraph>{description}</Typography.Paragraph>
+        {description ? (
+          <Typography.Paragraph>{description}</Typography.Paragraph>
+        ) : null}
       </div>
       {extra ? <div>{extra}</div> : null}
     </div>

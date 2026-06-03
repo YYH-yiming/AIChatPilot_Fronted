@@ -16,31 +16,31 @@ import { useAuthStore } from '../../stores/auth-store';
 const entries = [
   {
     title: '知识库管理',
-    description: '用于后续接入知识库 CRUD、文档上传与调试链路。',
+    description: '管理知识库与文档，跟踪解析、切片与索引状态。',
     path: '/app/knowledge',
     icon: <DatabaseOutlined />,
   },
   {
     title: 'Agent 调试台',
-    description: '保留独立 Agent 验证入口与工具调用呈现空间。',
+    description: '验证意图路由、知识库绑定与工具调用效果。',
     path: '/app/agent',
     icon: <RobotOutlined />,
   },
   {
     title: '会话中心',
-    description: '后续用于接入普通消息与 SSE 事件式流。',
+    description: '管理会话历史，支持知识库与 Agent 两种问答模式。',
     path: '/app/chat',
     icon: <MessageOutlined />,
   },
   {
     title: '分析看板',
-    description: '后续用于展示趋势、来源分布与性能指标。',
+    description: '查看会话趋势、来源分布、意图分布与性能指标。',
     path: '/app/analytics',
     icon: <BarChartOutlined />,
   },
   {
     title: '系统设置',
-    description: '预留个人信息与租户设置位置。',
+    description: '查看个人信息，维护租户名称、模型与密钥配置。',
     path: '/app/settings',
     icon: <SettingOutlined />,
   },
@@ -75,8 +75,7 @@ export function HomePage() {
       <PageHeader
         eyebrow="Workspace"
         title={`欢迎回来，${user.nickname || user.username}`}
-        description=""
-        extra={<Tag color="green">认证主链路已打通</Tag>}
+        description="从这里进入知识库、检索调试、Agent、会话中心与分析看板。"
       />
 
       <Row gutter={[18, 18]}>
@@ -105,14 +104,14 @@ export function HomePage() {
         </Col>
         <Col xs={24} xl={9}>
           <Card className="surface-card surface-card--muted" bordered={false}>
-            <Typography.Title level={4}>当前阶段</Typography.Title>
+            <Typography.Title level={4}>快速开始</Typography.Title>
             <Space direction="vertical" size={10}>
-              <Tag color="cyan">基础骨架</Tag>
+              <Tag color="cyan">三步上手</Tag>
               <Typography.Paragraph>
-                已具备登录、注册、受保护路由、登录态恢复与统一请求层。首页暂不拉取租户详情与业务指标。
+                1. 在「知识库」中创建知识库并上传文档；2. 进入「检索调试」验证命中与回答；3. 在「会话中心」或「Agent 调试台」中实际问答。
               </Typography.Paragraph>
               <Typography.Text type="secondary">
-                后续任务可以直接在现有 Layout、Store、Query 与路由目录上扩展。
+                各模块也可从左侧导航或下方入口直接进入。
               </Typography.Text>
             </Space>
           </Card>
@@ -123,7 +122,7 @@ export function HomePage() {
         <div className="section-heading">
           <Typography.Title level={4}>页面入口</Typography.Title>
           <Typography.Text type="secondary">
-            {/* 当前仅保留结构占位，不在本里程碑中实现业务细节。 */}
+            选择一个模块进入对应的工作台。
           </Typography.Text>
         </div>
         <Row gutter={[18, 18]}>

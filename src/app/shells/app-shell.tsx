@@ -7,6 +7,7 @@ import {
   SettingOutlined,
   LogoutOutlined,
   MessageOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import { Avatar, Button, Dropdown, Layout, Menu, Space, Tag, Typography } from 'antd';
 import { useMemo } from 'react';
@@ -39,6 +40,9 @@ export function AppShell() {
     return matched?.key ?? '/app/home';
   }, [location.pathname]);
 
+  const activeLabel =
+    navItems.find((item) => item.key === activeKey)?.label ?? '总览';
+
   const username = user?.username ?? sessionUsername ?? '未知用户';
   const role = user?.role ?? '业务成员';
 
@@ -68,18 +72,18 @@ export function AppShell() {
         />
         <div className="app-shell__sider-footer">
           <Tag bordered={false} color="cyan">
-            认证骨架已就绪
+            使用提示
           </Tag>
           <Typography.Paragraph type="secondary">
-            后续里程碑将在这里接入知识库、检索调试、Agent 与会话中心。
+            在左侧切换知识库、Agent、会话中心与分析看板，右上角头像可查看个人信息或退出登录。
           </Typography.Paragraph>
         </div>
       </Sider>
       <Layout>
         <Header className="app-shell__header">
           <div>
-            <Typography.Text type="secondary">当前路径</Typography.Text>
-            <Typography.Title level={5}>{location.pathname}</Typography.Title>
+            <Typography.Text type="secondary">当前模块</Typography.Text>
+            <Typography.Title level={5}>{activeLabel}</Typography.Title>
           </div>
           <Dropdown
             trigger={['click']}
@@ -87,9 +91,17 @@ export function AppShell() {
               items: [
                 {
                   key: 'profile',
-                  label: '当前仅保留本地退出',
-                  disabled: true,
+                  label: '个人信息',
+                  icon: <UserOutlined />,
+                  onClick: () => navigate('/app/settings/profile'),
                 },
+                {
+                  key: 'tenant',
+                  label: '租户设置',
+                  icon: <SettingOutlined />,
+                  onClick: () => navigate('/app/settings/tenant'),
+                },
+                { type: 'divider' },
                 {
                   key: 'logout',
                   label: '退出登录',

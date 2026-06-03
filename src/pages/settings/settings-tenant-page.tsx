@@ -2,6 +2,7 @@ import { ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
+  App,
   Button,
   Card,
   Form,
@@ -9,7 +10,6 @@ import {
   InputNumber,
   Space,
   Typography,
-  message,
 } from 'antd';
 import { useEffect } from 'react';
 
@@ -38,6 +38,7 @@ function toFormValues(tenant: TenantInfo): TenantFormValues {
 
 export function SettingsTenantPage() {
   const [form] = Form.useForm();
+  const { message } = App.useApp();
   const tenantId = useAuthStore((state) => state.tenantId);
   const queryClient = useQueryClient();
 

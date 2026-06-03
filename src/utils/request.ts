@@ -1,7 +1,6 @@
-import { message } from 'antd';
-
 import type { ApiResult } from '../types/api';
 import { useAuthStore } from '../stores/auth-store';
+import { notifyError } from './message';
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.trim() || 'http://localhost:8080';
@@ -66,7 +65,7 @@ export async function request<T>(
 
   if (response.status === 401) {
     useAuthStore.getState().clearAuth();
-    message.error('登录已过期，请重新登录');
+    notifyError('登录已过期，请重新登录');
     const currentPath = `${window.location.pathname}${window.location.search}`;
     if (window.location.pathname !== '/login') {
       window.location.replace(`/login?redirect=${encodeURIComponent(currentPath)}`);
@@ -79,7 +78,7 @@ export async function request<T>(
     const errorMessage = resolveErrorMessage(response.status, fallback);
 
     if (response.status === 429 || response.status >= 500) {
-      message.error(errorMessage);
+      notifyError(errorMessage);
     }
 
     throw new RequestError(errorMessage, response.status, payload?.code);

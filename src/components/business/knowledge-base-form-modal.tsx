@@ -84,7 +84,7 @@ export function KnowledgeBaseFormModal({
         <Form.Item
           label="Embedding 模型"
           name="embeddingModel"
-          rules={[{ max: 200, message: '模型名不能超过 200 个字符' }]}
+          rules={[{ max: 100, message: '模型名不能超过 100 个字符' }]}
         >
           <Input placeholder="例如：bge-large-zh-v1.5" />
         </Form.Item>

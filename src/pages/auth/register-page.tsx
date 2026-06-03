@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
-import { Alert, Button, Card, Form, Input, Space, Typography, message } from 'antd';
+import { Alert, App, Button, Card, Form, Input, Space, Typography } from 'antd';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { register } from '../../api/auth';
@@ -7,6 +7,7 @@ import type { RegisterPayload } from '../../types/auth';
 
 export function RegisterPage() {
   const navigate = useNavigate();
+  const { message } = App.useApp();
 
   const registerMutation = useMutation({
     mutationFn: register,

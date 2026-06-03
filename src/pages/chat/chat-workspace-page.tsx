@@ -1,4 +1,5 @@
 import {
+  LoadingOutlined,
   LockOutlined,
   MessageOutlined,
   PlusOutlined,
@@ -83,8 +84,11 @@ function formatDateTime(value?: string) {
   }).format(date);
 }
 
+// 后端 ChatConstants：SESSION_STATUS_ACTIVE = 1、SESSION_STATUS_CLOSED = 2
+const SESSION_STATUS_CLOSED = 2;
+
 function isClosedSession(session?: ChatSession | null) {
-  return session?.status === 0;
+  return session?.status === SESSION_STATUS_CLOSED;
 }
 
 function mergeMessages(
@@ -149,31 +153,17 @@ export function ChatWorkspacePage() {
   const [closedSessionIds, setClosedSessionIds] = useState<Record<number, true>>({});
   const [activeStream, setActiveStream] = useState<ActiveStreamState | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
-  const [streamDonePending, setStreamDonePending] = useState(false);
   const [streamSending, setStreamSending] = useState(false);
-  const [streamStartReceived, setStreamStartReceived] = useState(false);
   const [streamReplyReceived, setStreamReplyReceived] = useState(false);
-  const [streamDoneReceived, setStreamDoneReceived] = useState(false);
-  const [streamEventError, setStreamEventError] = useState<string | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
-  const activeStreamRef = useRef<ActiveStreamState | null>(null);
-
-  useEffect(() => {
-    activeStreamRef.current = activeStream;
-  }, [activeStream]);
 
   const resetStreamState = () => {
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
-    activeStreamRef.current = null;
     setActiveStream(null);
     setStreamError(null);
-    setStreamDonePending(false);
     setStreamSending(false);
-    setStreamStartReceived(false);
     setStreamReplyReceived(false);
-    setStreamDoneReceived(false);
-    setStreamEventError(null);
   };
 
   useEffect(() => {
@@ -309,14 +299,13 @@ export function ChatWorkspacePage() {
 
     const userContent = payload.content;
     const controller = new AbortController();
+    // 后端 SSE 会在同一段数据里连续推送 reply 与 done，用闭包局部变量承接回答，
+    // 避免依赖异步同步的 ref 导致 onDone 读到尚未更新的回答而丢失结果。
+    let latestReply: ChatReply | undefined;
     streamAbortRef.current = controller;
     setStreamSending(true);
     setStreamError(null);
-    setStreamEventError(null);
-    setStreamStartReceived(false);
     setStreamReplyReceived(false);
-    setStreamDoneReceived(false);
-    setStreamDonePending(false);
     setActiveStream({
       sessionId: validSessionId,
       userContent,
@@ -329,7 +318,6 @@ export function ChatWorkspacePage() {
         payload,
         {
           onStart: () => {
-            setStreamStartReceived(true);
             setActiveStream((current) =>
               current
                 ? {
@@ -340,8 +328,8 @@ export function ChatWorkspacePage() {
             );
           },
           onReply: (reply) => {
+            latestReply = reply;
             setStreamReplyReceived(true);
-            setStreamDonePending(true);
             setActiveStream((current) =>
               current
                 ? {
@@ -353,30 +341,20 @@ export function ChatWorkspacePage() {
             );
           },
           onDone: async (doneEvent) => {
-            setStreamDoneReceived(true);
-            const currentStream = activeStreamRef.current;
-            const reply = currentStream?.reply;
-            const content = currentStream?.userContent ?? userContent;
-
-            if (reply) {
-              await finalizeStreamReply(reply, content, doneEvent);
-              message.success('流式消息已完成');
+            if (latestReply) {
+              await finalizeStreamReply(latestReply, userContent, doneEvent);
+              message.success('回答已生成');
             }
 
             setStreamSending(false);
-            setStreamDonePending(false);
             streamAbortRef.current = null;
-            activeStreamRef.current = null;
             setActiveStream(null);
           },
           onError: (event) => {
             const text = event.message || '流式消息处理失败';
-            setStreamEventError(text);
             setStreamError(text);
             setStreamSending(false);
-            setStreamDonePending(false);
             streamAbortRef.current = null;
-            activeStreamRef.current = null;
             setActiveStream(null);
             message.error(text);
           },
@@ -392,9 +370,7 @@ export function ChatWorkspacePage() {
         error instanceof Error ? error.message : '流式请求启动失败';
       setStreamError(text);
       setStreamSending(false);
-      setStreamDonePending(false);
       streamAbortRef.current = null;
-      activeStreamRef.current = null;
       setActiveStream(null);
       message.error(text);
     }
@@ -508,10 +484,7 @@ export function ChatWorkspacePage() {
           messageId: -2,
           sessionId: activeStream.sessionId,
           role: 'assistant',
-          content:
-            activeStream.phase === 'start'
-              ? '正在思考，等待完整 reply 返回...'
-              : '流式请求已发出，等待 start 事件...',
+          content: '正在思考…',
           createdAt: now,
         };
 
@@ -523,7 +496,7 @@ export function ChatWorkspacePage() {
       <PageHeader
         eyebrow="Chat Workspace"
         title="会话中心"
-        description="当前页面聚焦同步消息链路，提供会话列表、新建会话、会话详情、普通消息发送和关闭会话。"
+        description="管理会话历史，支持知识库与 Agent 两种模式的问答与流式回复。"
         extra={
           <Button
             type="primary"
@@ -542,7 +515,7 @@ export function ChatWorkspacePage() {
               <div>
                 <Typography.Title level={4}>会话列表</Typography.Title>
                 <Typography.Paragraph>
-                  {/* 左侧只负责近期会话导航，不做聊天营销式布局。 */}
+                  选择会话查看历史，或新建会话开始问答。
                 </Typography.Paragraph>
               </div>
               <Button
@@ -658,7 +631,9 @@ export function ChatWorkspacePage() {
                       {selectedSession.title || '未命名会话'}
                     </Typography.Title>
                     <Typography.Paragraph>
-                      当前模式为 {selectedSession.mode}。knowledge 模式强调 references / grounded，agent 模式强调 intent / toolsCalled / answerSource。
+                      {selectedSession.mode === 'knowledge'
+                        ? '当前为知识库模式，回答会标注引用来源与命中情况。'
+                        : '当前为 Agent 模式，回答会标注意图路由与工具调用。'}
                     </Typography.Paragraph>
                   </div>
                   <Space size={8} wrap>
@@ -697,7 +672,7 @@ export function ChatWorkspacePage() {
                   <div>
                     <Typography.Title level={4}>消息列表</Typography.Title>
                     <Typography.Paragraph>
-                      {/* 当前只打通同步消息链路，不做 SSE 或 token 流。 */}
+                      用户与助手的历史消息，含引用、意图与性能信息。
                     </Typography.Paragraph>
                   </div>
                   <Button
@@ -793,19 +768,12 @@ export function ChatWorkspacePage() {
                             <Typography.Text strong>
                               {messageItem.role === 'user' ? '用户' : '助手'}
                             </Typography.Text>
-                            <Space size={8} wrap>
-                              {messageItem.role === 'assistant' ? (
-                                <Tag color={streamReplyReceived ? 'gold' : 'processing'}>
-                                  {streamReplyReceived
-                                    ? 'reply 已收到，等待 done'
-                                    : streamStartReceived
-                                      ? '已收到 start'
-                                      : '流式发送中'}
-                                </Tag>
-                              ) : (
-                                <Tag color="processing">流式发送中</Tag>
-                              )}
-                            </Space>
+                            {messageItem.role === 'assistant' &&
+                            !streamReplyReceived ? (
+                              <Tag icon={<LoadingOutlined />} color="processing">
+                                正在思考
+                              </Tag>
+                            ) : null}
                           </div>
                           <Typography.Paragraph className="ask-answer__content">
                             {messageItem.content}
@@ -859,7 +827,7 @@ export function ChatWorkspacePage() {
                   }}
                 >
                   <Form.Item
-                    label="发送同步消息"
+                    label="消息内容"
                     name="content"
                     rules={[
                       { required: true, message: '请输入消息内容' },
@@ -873,47 +841,42 @@ export function ChatWorkspacePage() {
                         isClosed
                           ? '当前会话已关闭，无法继续发送'
                           : selectedSession.mode === 'knowledge'
-                            ? 'knowledge 模式下会强调 references、grounded、rewrittenQuery'
-                            : 'agent 模式下会强调 intent、toolsCalled、answerSource'
+                            ? '输入问题，回答会基于知识库引用'
+                            : '输入问题，由 Agent 路由意图并作答'
                       }
                     />
                   </Form.Item>
-                  <Button
-                    type="primary"
-                    htmlType="submit"
-                    icon={isClosed ? <LockOutlined /> : <SendOutlined />}
-                    disabled={isClosed || streamSending}
-                    loading={sendMessageMutation.isPending}
-                  >
-                    {isClosed ? '会话已关闭' : '发送同步消息'}
-                  </Button>
-                  <Button
-                    className="chat-stream-button"
-                    icon={isClosed ? <LockOutlined /> : <MessageOutlined />}
-                    disabled={isClosed || sendMessageMutation.isPending}
-                    loading={streamSending}
-                    onClick={() => {
-                      void handleStreamSend();
-                    }}
-                  >
-                    {isClosed ? '会话已关闭' : '发送流式消息'}
-                  </Button>
+                  <Space size={12} wrap>
+                    {/* <Button
+                      type="primary"
+                      icon={isClosed ? <LockOutlined /> : <SendOutlined />}
+                      disabled={isClosed || sendMessageMutation.isPending}
+                      loading={streamSending}
+                      onClick={() => {
+                        void handleStreamSend();
+                      }}
+                    >
+                      {isClosed ? '会话已关闭' : '发送'}
+                    </Button> */}
+                    <Button
+                      htmlType="submit"
+                      icon={isClosed ? <LockOutlined /> : <MessageOutlined />}
+                      disabled={isClosed || streamSending}
+                      loading={sendMessageMutation.isPending}
+                    >
+                      {isClosed ? '会话已关闭' : '同步发送'}
+                    </Button>
+                  </Space>
+                  {!isClosed ? (
+                    <Typography.Paragraph
+                      type="secondary"
+                      className="chat-send-hint"
+                    >
+                      {/* 「发送」采用事件流：处理时显示“正在思考”，回答生成后整条返回； */}
+                      「同步发送」直接等待完整结果返回。
+                    </Typography.Paragraph>
+                  ) : null}
                 </Form>
-                {(streamSending || streamDonePending || streamEventError) && !isClosed ? (
-                  <div className="chat-stream-status">
-                    <Space size={8} wrap>
-                      <Tag color={streamStartReceived ? 'processing' : 'default'}>
-                        start {streamStartReceived ? '已收到' : '未收到'}
-                      </Tag>
-                      <Tag color={streamReplyReceived ? 'gold' : 'default'}>
-                        reply {streamReplyReceived ? '已收到' : '未收到'}
-                      </Tag>
-                      <Tag color={streamDoneReceived ? 'green' : 'default'}>
-                        done {streamDoneReceived ? '已收到' : '未收到'}
-                      </Tag>
-                    </Space>
-                  </div>
-                ) : null}
               </Card>
             </Space>
           ) : null}

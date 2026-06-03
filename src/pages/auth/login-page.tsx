@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
-import { Alert, Button, Card, Checkbox, Form, Input, Space, Typography, message } from 'antd';
+import { Alert, App, Button, Card, Checkbox, Form, Input, Space, Typography } from 'antd';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { getCurrentUser, login } from '../../api/auth';
@@ -14,6 +14,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  const { message } = App.useApp();
   const saveSession = useAuthStore((state) => state.saveSession);
   const syncUser = useAuthStore((state) => state.syncUser);
   const clearAuth = useAuthStore((state) => state.clearAuth);

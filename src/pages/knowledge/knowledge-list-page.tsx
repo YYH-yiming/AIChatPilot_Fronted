@@ -299,7 +299,7 @@ export function KnowledgeListPage() {
       <PageHeader
         eyebrow="Knowledge"
         title="知识库管理"
-        description="当前页面负责承接当前租户下的知识库列表与基础 CRUD。详情、文档上传和检索调试将在后续子任务接入。"
+        description="管理当前租户下的知识库：支持创建、编辑、删除，并可进入详情查看文档解析与切片，或进入检索调试验证命中与回答。"
         extra={
           <Button
             type="primary"
@@ -338,7 +338,7 @@ export function KnowledgeListPage() {
           <div>
             <Typography.Title level={4}>当前租户知识库</Typography.Title>
             <Typography.Paragraph>
-              表格视图优先支持管理与排查。每条记录可直接进入详情占位或调试占位，并支持编辑、删除。
+              表格视图优先支持管理与排查。每条记录可直接进入详情页或检索调试页，并支持编辑、删除。
             </Typography.Paragraph>
           </div>
           <Button
