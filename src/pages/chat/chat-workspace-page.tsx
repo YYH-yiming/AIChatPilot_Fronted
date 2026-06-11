@@ -49,6 +49,7 @@ import type {
   ChatSession,
   ChatSessionDetail,
   ChatStreamDoneEvent,
+  ChatStreamMetaEvent,
   CreateChatSessionPayload,
   SendChatMessagePayload,
 } from '../../types/chat';
@@ -57,13 +58,15 @@ import type { KnowledgeBase } from '../../types/knowledge';
 const SESSION_PAGE_SIZE = 12;
 const MESSAGE_PAGE_SIZE = 20;
 
-type StreamPhase = 'sending' | 'start' | 'reply';
+type StreamPhase = 'sending' | 'start' | 'meta' | 'streaming' | 'reply';
 
 type ActiveStreamState = {
   sessionId: number;
   userContent: string;
   phase: StreamPhase;
-  reply?: ChatReply;
+  reply?: ChatReply; // 假流式 / agent 整段回答
+  meta?: ChatStreamMetaEvent; // 真流式：检索元信息（引用 / grounded / 改写）
+  streamingAnswer?: string; // 真流式：已累积的可见答案
 };
 
 function formatDateTime(value?: string) {
@@ -102,6 +105,31 @@ function mergeMessages(
   return Array.from(map.values()).sort((left, right) => {
     return (left.createdAt || '').localeCompare(right.createdAt || '');
   });
+}
+
+// 真流式无整段 reply：用 meta（检索元信息）+ 累积文本 + done（消息 id / 耗时）拼出 ChatReply，
+// 复用 buildReplyMessages / finalizeStreamReply 落库，与假流式同一条收尾路径。
+function buildStreamReply(
+  answer: string,
+  meta: ChatStreamMetaEvent | undefined,
+  doneEvent: ChatStreamDoneEvent,
+  fallbackSessionId: number,
+): ChatReply {
+  return {
+    sessionId: doneEvent.sessionId ?? fallbackSessionId,
+    userMessageId: doneEvent.userMessageId ?? -1,
+    assistantMessageId: doneEvent.assistantMessageId ?? -2,
+    mode: meta?.mode ?? 'knowledge',
+    answerSource: meta?.answerSource,
+    answer,
+    rewrittenQuery: meta?.rewrittenQuery,
+    kbId: meta?.kbId,
+    topK: meta?.topK,
+    grounded: meta?.grounded,
+    referenceCount: meta?.referenceCount,
+    references: meta?.references,
+    durationMs: doneEvent.durationMs,
+  };
 }
 
 function buildReplyMessages(reply: ChatReply, userContent: string) {
@@ -299,9 +327,12 @@ export function ChatWorkspacePage() {
 
     const userContent = payload.content;
     const controller = new AbortController();
-    // 后端 SSE 会在同一段数据里连续推送 reply 与 done，用闭包局部变量承接回答，
-    // 避免依赖异步同步的 ref 导致 onDone 读到尚未更新的回答而丢失结果。
+    // 后端 SSE 在同一段数据里连续推送事件，用闭包局部变量承接，避免异步 state 未及时更新导致 onDone 读到旧值。
+    // 假流式：start→reply→done（reply 整段）；真流式：start→meta→token×N→done（meta 给引用，token 给增量）。
     let latestReply: ChatReply | undefined;
+    let latestMeta: ChatStreamMetaEvent | undefined;
+    let streamedText = '';
+    let doneReceived = false;
     streamAbortRef.current = controller;
     setStreamSending(true);
     setStreamError(null);
@@ -319,11 +350,22 @@ export function ChatWorkspacePage() {
         {
           onStart: () => {
             setActiveStream((current) =>
+              current ? { ...current, phase: 'start' } : current,
+            );
+          },
+          onMeta: (metaEvent) => {
+            latestMeta = metaEvent;
+            setActiveStream((current) =>
+              current ? { ...current, phase: 'meta', meta: metaEvent } : current,
+            );
+          },
+          onToken: (tokenEvent) => {
+            streamedText += tokenEvent.text;
+            const snapshot = streamedText;
+            setStreamReplyReceived(true);
+            setActiveStream((current) =>
               current
-                ? {
-                    ...current,
-                    phase: 'start',
-                  }
+                ? { ...current, phase: 'streaming', streamingAnswer: snapshot }
                 : current,
             );
           },
@@ -341,8 +383,21 @@ export function ChatWorkspacePage() {
             );
           },
           onDone: async (doneEvent) => {
-            if (latestReply) {
-              await finalizeStreamReply(latestReply, userContent, doneEvent);
+            // 标记流已正常结束：之后底层连接善后关闭即便抛错也属误报（见外层 catch）。
+            doneReceived = true;
+            // 真流式无 reply：用 meta + 累积文本 + done 拼出回答；假流式 / agent 直接用 reply。
+            const finalReply =
+              latestReply ??
+              (streamedText || latestMeta
+                ? buildStreamReply(
+                    streamedText,
+                    latestMeta,
+                    doneEvent,
+                    validSessionId,
+                  )
+                : undefined);
+            if (finalReply) {
+              await finalizeStreamReply(finalReply, userContent, doneEvent);
               message.success('回答已生成');
             }
 
@@ -362,7 +417,9 @@ export function ChatWorkspacePage() {
         controller.signal,
       );
     } catch (error) {
-      if (controller.signal.aborted) {
+      // 已收到 done（流正常结束）后，底层连接善后关闭/异步收尾可能抛网络错误——属误报，吞掉，
+      // 避免"回答已生成 + network error"双提示。
+      if (controller.signal.aborted || doneReceived) {
         return;
       }
 
@@ -462,31 +519,33 @@ export function ChatWorkspacePage() {
       createdAt: now,
     };
 
-    const assistantPreview: ChatMessage = activeStream.reply
-      ? {
-          messageId: -2,
-          sessionId: activeStream.sessionId,
-          role: 'assistant',
-          content: activeStream.reply.answer,
-          answerSource: activeStream.reply.answerSource,
-          intent: activeStream.reply.intent,
-          kbId: activeStream.reply.kbId,
-          tokenUsed: activeStream.reply.tokenUsed,
-          durationMs: activeStream.reply.durationMs,
-          createdAt: now,
-          references: activeStream.reply.references,
-          rewrittenQuery: activeStream.reply.rewrittenQuery,
-          grounded: activeStream.reply.grounded,
-          referenceCount: activeStream.reply.referenceCount,
-          toolsCalled: activeStream.reply.toolsCalled,
-        }
-      : {
-          messageId: -2,
-          sessionId: activeStream.sessionId,
-          role: 'assistant',
-          content: '正在思考…',
-          createdAt: now,
-        };
+    // 检索元信息：假流式来自整段 reply，真流式来自 meta；字段一致，统一取用以便边生成边展示引用。
+    const info = activeStream.reply ?? activeStream.meta;
+    const streamedAnswer =
+      activeStream.reply?.answer ?? activeStream.streamingAnswer ?? '';
+    const assistantContent = streamedAnswer
+      ? streamedAnswer
+      : activeStream.meta
+        ? '检索完成，正在生成回答…'
+        : '正在思考…';
+
+    const assistantPreview: ChatMessage = {
+      messageId: -2,
+      sessionId: activeStream.sessionId,
+      role: 'assistant',
+      content: assistantContent,
+      answerSource: info?.answerSource,
+      intent: activeStream.reply?.intent,
+      kbId: info?.kbId,
+      tokenUsed: activeStream.reply?.tokenUsed,
+      durationMs: activeStream.reply?.durationMs,
+      createdAt: now,
+      references: info?.references,
+      rewrittenQuery: info?.rewrittenQuery,
+      grounded: info?.grounded,
+      referenceCount: info?.referenceCount,
+      toolsCalled: activeStream.reply?.toolsCalled,
+    };
 
     return [userPreview, assistantPreview];
   }, [activeStream, validSessionId]);
@@ -771,14 +830,17 @@ export function ChatWorkspacePage() {
                             {messageItem.role === 'assistant' &&
                             !streamReplyReceived ? (
                               <Tag icon={<LoadingOutlined />} color="processing">
-                                正在思考
+                                {activeStream?.phase === 'meta'
+                                  ? '检索完成，生成中'
+                                  : '正在思考'}
                               </Tag>
                             ) : null}
                           </div>
                           <Typography.Paragraph className="ask-answer__content">
                             {messageItem.content}
                           </Typography.Paragraph>
-                          {messageItem.role === 'assistant' && activeStream?.reply
+                          {messageItem.role === 'assistant' &&
+                          (activeStream?.reply || activeStream?.meta)
                             ? renderAssistantMetadata(messageItem)
                             : null}
                         </div>
@@ -847,7 +909,7 @@ export function ChatWorkspacePage() {
                     />
                   </Form.Item>
                   <Space size={12} wrap>
-                    {/* <Button
+                    <Button
                       type="primary"
                       icon={isClosed ? <LockOutlined /> : <SendOutlined />}
                       disabled={isClosed || sendMessageMutation.isPending}
@@ -856,12 +918,14 @@ export function ChatWorkspacePage() {
                         void handleStreamSend();
                       }}
                     >
-                      {isClosed ? '会话已关闭' : '发送'}
-                    </Button> */}
+                      {isClosed ? '会话已关闭' : '流式发送'}
+                    </Button>
                     <Button
                       htmlType="submit"
                       icon={isClosed ? <LockOutlined /> : <MessageOutlined />}
-                      disabled={isClosed || streamSending}
+                      disabled={
+                        isClosed || streamSending || sendMessageMutation.isPending
+                      }
                       loading={sendMessageMutation.isPending}
                     >
                       {isClosed ? '会话已关闭' : '同步发送'}
@@ -872,8 +936,8 @@ export function ChatWorkspacePage() {
                       type="secondary"
                       className="chat-send-hint"
                     >
-                      {/* 「发送」采用事件流：处理时显示“正在思考”，回答生成后整条返回； */}
-                      「同步发送」直接等待完整结果返回。
+                      「流式发送」走 SSE：先显示「正在思考 / 检索完成」，随后逐字输出（需后端开启
+                      CHAT_SSE_TRUE_STREAMING；未开启时整段返回）。「同步发送」等待完整结果返回。
                     </Typography.Paragraph>
                   ) : null}
                 </Form>

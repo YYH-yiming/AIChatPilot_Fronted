@@ -7,7 +7,9 @@ import type {
   ChatSessionDetail,
   ChatStreamDoneEvent,
   ChatStreamErrorEvent,
+  ChatStreamMetaEvent,
   ChatStreamStartEvent,
+  ChatStreamTokenEvent,
   CreateChatSessionPayload,
   SendChatMessagePayload,
 } from '../types/chat';
@@ -60,6 +62,8 @@ export function closeChatSession(sessionId: number) {
 
 type StreamChatHandlers = {
   onStart?: (payload: ChatStreamStartEvent) => void;
+  onMeta?: (payload: ChatStreamMetaEvent) => void;
+  onToken?: (payload: ChatStreamTokenEvent) => void;
   onReply?: (payload: ChatReply) => void;
   onDone?: (payload: ChatStreamDoneEvent) => void;
   onError?: (payload: ChatStreamErrorEvent) => void;
@@ -162,6 +166,16 @@ export async function streamChatMessage(
 
           if (item.event === 'start') {
             handlers.onStart?.(parsedPayload as ChatStreamStartEvent);
+            return;
+          }
+
+          if (item.event === 'meta') {
+            handlers.onMeta?.(parsedPayload as ChatStreamMetaEvent);
+            return;
+          }
+
+          if (item.event === 'token') {
+            handlers.onToken?.(parsedPayload as ChatStreamTokenEvent);
             return;
           }
 

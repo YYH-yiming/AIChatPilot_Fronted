@@ -84,7 +84,7 @@ export function ChatCreateSessionModal({
           dependencies={['mode']}
           rules={[
             {
-              validator: async (_rule, value: number | undefined) => {
+              validator: async (_rule: unknown, value: number | undefined) => {
                 if (mode === 'knowledge' && !value) {
                   throw new Error('Knowledge 模式需选择要绑定的知识库');
                 }
