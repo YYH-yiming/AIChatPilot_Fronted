@@ -1,7 +1,9 @@
 import {
+  AudioOutlined,
   LoadingOutlined,
   LockOutlined,
   MessageOutlined,
+  PictureOutlined,
   PlusOutlined,
   ReloadOutlined,
   SendOutlined,
@@ -34,8 +36,11 @@ import {
   getChatSessionDetail,
   getChatSessions,
   sendChatMessage,
+  streamChatAudioMessage,
+  streamChatImageMessage,
   streamChatMessage,
 } from '../../api/chat';
+import type { StreamChatHandlers } from '../../api/chat';
 import { getKnowledgeBases } from '../../api/knowledge';
 import { ChatCreateSessionModal } from '../../components/business/chat-create-session-modal';
 import { KnowledgeReferenceList } from '../../components/business/knowledge-reference-list';
@@ -184,10 +189,20 @@ export function ChatWorkspacePage() {
   const [streamSending, setStreamSending] = useState(false);
   const [streamReplyReceived, setStreamReplyReceived] = useState(false);
   const streamAbortRef = useRef<AbortController | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
 
   const resetStreamState = () => {
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    mediaRecorderRef.current = null;
+    audioChunksRef.current = [];
+    setIsRecording(false);
     setActiveStream(null);
     setStreamError(null);
     setStreamSending(false);
@@ -315,53 +330,57 @@ export function ChatWorkspacePage() {
     await queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
   };
 
-  const handleStreamSend = async () => {
+  // 文本/语音共用的流式编排：建 AbortController、维护本次流的闭包状态、统一各事件回调与收尾。
+  // userContentInitial = 先占位的用户气泡文本（语音用"识别中…"，收到 recognized 事件后替换为转写文本）。
+  const startStreaming = async (
+    userContentInitial: string,
+    invoke: (handlers: StreamChatHandlers, signal: AbortSignal) => Promise<void>,
+  ) => {
     if (validSessionId === null || isClosed || streamSending) {
       return;
     }
-
-    const values = (await messageForm.validateFields()) as { content: string };
-    const payload: SendChatMessagePayload = {
-      content: values.content.trim(),
-    };
-
-    const userContent = payload.content;
     const controller = new AbortController();
-    // 后端 SSE 在同一段数据里连续推送事件，用闭包局部变量承接，避免异步 state 未及时更新导致 onDone 读到旧值。
-    // 假流式：start→reply→done（reply 整段）；真流式：start→meta→token×N→done（meta 给引用，token 给增量）。
-    let latestReply: ChatReply | undefined;
-    let latestMeta: ChatStreamMetaEvent | undefined;
-    let streamedText = '';
-    let doneReceived = false;
+    const state = {
+      reply: undefined as ChatReply | undefined,
+      meta: undefined as ChatStreamMetaEvent | undefined,
+      text: '',
+      done: false,
+      userContent: userContentInitial,
+    };
     streamAbortRef.current = controller;
     setStreamSending(true);
     setStreamError(null);
     setStreamReplyReceived(false);
     setActiveStream({
       sessionId: validSessionId,
-      userContent,
+      userContent: userContentInitial,
       phase: 'sending',
     });
 
     try {
-      await streamChatMessage(
-        validSessionId,
-        payload,
+      await invoke(
         {
           onStart: () => {
             setActiveStream((current) =>
               current ? { ...current, phase: 'start' } : current,
             );
           },
+          // 语音/图像：识别完成 → 把用户气泡占位文本替换为真实识别文本，并用于落库。
+          onRecognized: (event) => {
+            state.userContent = event.text;
+            setActiveStream((current) =>
+              current ? { ...current, userContent: event.text } : current,
+            );
+          },
           onMeta: (metaEvent) => {
-            latestMeta = metaEvent;
+            state.meta = metaEvent;
             setActiveStream((current) =>
               current ? { ...current, phase: 'meta', meta: metaEvent } : current,
             );
           },
           onToken: (tokenEvent) => {
-            streamedText += tokenEvent.text;
-            const snapshot = streamedText;
+            state.text += tokenEvent.text;
+            const snapshot = state.text;
             setStreamReplyReceived(true);
             setActiveStream((current) =>
               current
@@ -370,37 +389,23 @@ export function ChatWorkspacePage() {
             );
           },
           onReply: (reply) => {
-            latestReply = reply;
+            state.reply = reply;
             setStreamReplyReceived(true);
             setActiveStream((current) =>
-              current
-                ? {
-                    ...current,
-                    phase: 'reply',
-                    reply,
-                  }
-                : current,
+              current ? { ...current, phase: 'reply', reply } : current,
             );
           },
           onDone: async (doneEvent) => {
-            // 标记流已正常结束：之后底层连接善后关闭即便抛错也属误报（见外层 catch）。
-            doneReceived = true;
-            // 真流式无 reply：用 meta + 累积文本 + done 拼出回答；假流式 / agent 直接用 reply。
+            state.done = true;
             const finalReply =
-              latestReply ??
-              (streamedText || latestMeta
-                ? buildStreamReply(
-                    streamedText,
-                    latestMeta,
-                    doneEvent,
-                    validSessionId,
-                  )
+              state.reply ??
+              (state.text || state.meta
+                ? buildStreamReply(state.text, state.meta, doneEvent, validSessionId)
                 : undefined);
             if (finalReply) {
-              await finalizeStreamReply(finalReply, userContent, doneEvent);
+              await finalizeStreamReply(finalReply, state.userContent, doneEvent);
               message.success('回答已生成');
             }
-
             setStreamSending(false);
             streamAbortRef.current = null;
             setActiveStream(null);
@@ -417,20 +422,94 @@ export function ChatWorkspacePage() {
         controller.signal,
       );
     } catch (error) {
-      // 已收到 done（流正常结束）后，底层连接善后关闭/异步收尾可能抛网络错误——属误报，吞掉，
-      // 避免"回答已生成 + network error"双提示。
-      if (controller.signal.aborted || doneReceived) {
+      // 已收到 done（流正常结束）后底层连接善后关闭抛错属误报，吞掉。
+      if (controller.signal.aborted || state.done) {
         return;
       }
-
-      const text =
-        error instanceof Error ? error.message : '流式请求启动失败';
+      const text = error instanceof Error ? error.message : '流式请求启动失败';
       setStreamError(text);
       setStreamSending(false);
       streamAbortRef.current = null;
       setActiveStream(null);
       message.error(text);
     }
+  };
+
+  const handleStreamSend = async () => {
+    if (validSessionId === null || isClosed || streamSending) {
+      return;
+    }
+    const values = (await messageForm.validateFields()) as { content: string };
+    const content = values.content.trim();
+    await startStreaming(content, (handlers, signal) =>
+      streamChatMessage(validSessionId, { content }, handlers, signal),
+    );
+  };
+
+  const handleAudioSend = async (audio: Blob) => {
+    if (validSessionId === null || isClosed || streamSending) {
+      return;
+    }
+    await startStreaming('🎤 语音识别中…', (handlers, signal) =>
+      streamChatAudioMessage(validSessionId, audio, handlers, signal),
+    );
+  };
+
+  const handleImageSend = async (image: File) => {
+    if (validSessionId === null || isClosed || streamSending) {
+      return;
+    }
+    // 输入框文字若有，作为图片的随附问题（caption）一并发送。
+    const caption =
+      (messageForm.getFieldValue('content') as string | undefined)?.trim() || undefined;
+    await startStreaming('🖼️ 图片识别中…', (handlers, signal) =>
+      streamChatImageMessage(validSessionId, image, handlers, signal, caption),
+    );
+  };
+
+  const startRecording = async () => {
+    if (isClosed || streamSending || isRecording) {
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      message.error('当前浏览器不支持录音');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const blob = new Blob(audioChunksRef.current, {
+          type: recorder.mimeType || 'audio/webm',
+        });
+        audioChunksRef.current = [];
+        if (blob.size > 0) {
+          void handleAudioSend(blob);
+        }
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : '无法访问麦克风';
+      message.error(`录音失败：${text}`);
+    }
+  };
+
+  const stopRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+    }
+    mediaRecorderRef.current = null;
+    setIsRecording(false);
   };
 
   const renderSessionItem = (session: ChatSession) => {
@@ -930,6 +1009,49 @@ export function ChatWorkspacePage() {
                     >
                       {isClosed ? '会话已关闭' : '同步发送'}
                     </Button>
+                    <Button
+                      icon={isRecording ? <LoadingOutlined /> : <AudioOutlined />}
+                      danger={isRecording}
+                      disabled={
+                        isClosed ||
+                        (streamSending && !isRecording) ||
+                        sendMessageMutation.isPending
+                      }
+                      onClick={() => {
+                        if (isRecording) {
+                          stopRecording();
+                        } else {
+                          void startRecording();
+                        }
+                      }}
+                    >
+                      {isRecording ? '停止并发送' : '语音输入'}
+                    </Button>
+                    <Button
+                      icon={<PictureOutlined />}
+                      disabled={
+                        isClosed ||
+                        streamSending ||
+                        isRecording ||
+                        sendMessageMutation.isPending
+                      }
+                      onClick={() => imageInputRef.current?.click()}
+                    >
+                      图片输入
+                    </Button>
+                    <input
+                      ref={imageInputRef}
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = '';
+                        if (file) {
+                          void handleImageSend(file);
+                        }
+                      }}
+                    />
                   </Space>
                   {!isClosed ? (
                     <Typography.Paragraph
@@ -938,6 +1060,8 @@ export function ChatWorkspacePage() {
                     >
                       「流式发送」走 SSE：先显示「正在思考 / 检索完成」，随后逐字输出（需后端开启
                       CHAT_SSE_TRUE_STREAMING；未开启时整段返回）。「同步发送」等待完整结果返回。
+                      「语音输入」点击录音、再次点击停止并自动发送，先识别为文字再走同一问答链路（需后端开启
+                      MEDIA_ASR_ENABLED）。
                     </Typography.Paragraph>
                   ) : null}
                 </Form>

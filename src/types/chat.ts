@@ -64,10 +64,20 @@ export type ChatReply = {
   durationMs?: number;
   toolsCalled?: string[];
   references?: KnowledgeSearchResult[];
+  /** 多模态输入：语音转写 / 图片识别得到的文本（文本消息为 undefined）。 */
+  recognizedText?: string;
 };
 
 export type ChatStreamStartEvent = {
   sessionId: number;
+};
+
+/**
+ * 多模态流式 `recognized` 事件：语音转写 / 图片识别完成后下发一次，前端据此把用户气泡填为识别文本。
+ * 文本消息不发此事件。
+ */
+export type ChatStreamRecognizedEvent = {
+  text: string;
 };
 
 /**
